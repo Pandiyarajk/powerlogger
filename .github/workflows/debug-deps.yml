@@ -1,0 +1,214 @@
+name: Debug Dependencies
+
+on:
+  push:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  PACKAGE_NAME: "powerlogger"
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Debug repository structure
+        shell: powershell
+        run: |
+          Write-Host "Repository root contents:"
+          Get-ChildItem -Name
+          
+          Write-Host "Checking for requirements.txt..."
+          if (Test-Path '../requirements.txt') {
+            Write-Host "requirements.txt found"
+            Get-Content '../requirements.txt' | Select-Object -First 5
+          } else {
+            Write-Host "requirements.txt not found"
+          }
+          
+          Write-Host "Checking for pyproject.toml..."
+          if (Test-Path '../pyproject.toml') {
+            Write-Host "pyproject.toml found"
+            Get-Content '../pyproject.toml' | Select-Object -First 5
+          } else {
+            Write-Host "pyproject.toml not found"
+          }
+          
+          Write-Host "Checking for powerlogger directory..."
+          if (Test-Path 'powerlogger') {
+            Write-Host "powerlogger directory found"
+            Get-ChildItem 'powerlogger' -Recurse -Name | Select-Object -First 10
+          } else {
+            Write-Host "powerlogger directory not found"
+          }
+          
+          Write-Host "Checking for tests directory..."
+          if (Test-Path 'tests') {
+            Write-Host "tests directory found"
+            Get-ChildItem 'tests' -Recurse -Name | Select-Object -First 10
+          } else {
+            Write-Host "tests directory not found"
+          }
+      
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          
+          # Install dependencies from requirements.txt if it exists
+          if (Test-Path '../requirements.txt') {
+            Write-Host "Installing dependencies from requirements.txt..."
+            pip install -r ../requirements.txt
+            pip install rich
+          } else {
+            Write-Host "Installing basic testing tools..."
+            pip install pytest pytest-cov
+            pip install rich
+          }
+      
+      - name: Run tests
+        shell: powershell
+        run: |
+          Write-Host "Running tests..."
+          if (Test-Path 'tests') {
+            python -m pytest tests/ -v
+          } else {
+            Write-Host "No tests directory found, skipping tests"
+          }
+
+  debug:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Debug repository structure
+      shell: powershell
+      run: |
+        Write-Host "Repository root contents:"
+        Get-ChildItem -Name
+        
+        Write-Host "Repository structure (recursive):"
+        Get-ChildItem -Recurse -Name | Where-Object { $_ -match "(requirements\.txt|pyproject\.toml|powerlogger|tests)" }
+        
+        Write-Host "Current working directory:"
+        Get-Location
+        
+        Write-Host "Environment variables:"
+        Get-ChildItem Env: | Where-Object { $_.Name -match "(GITHUB|WORKSPACE|RUNNER)" } | Format-Table Name, Value
+
+    - name: Check dependency files
+      shell: powershell
+      run: |
+        Write-Host "Checking for requirements.txt..."
+        if (Test-Path '../requirements.txt') {
+          Write-Host "requirements.txt found"
+          Write-Host "Content (first 10 lines):"
+          Get-Content '../requirements.txt' | Select-Object -First 10
+          Write-Host "File size:"
+          Get-Item '../requirements.txt' | Select-Object Name, Length, LastWriteTime
+        } else {
+          Write-Host "requirements.txt not found"
+        }
+        
+        Write-Host "Checking for pyproject.toml..."
+        if (Test-Path '../pyproject.toml') {
+          Write-Host "pyproject.toml found"
+          Write-Host "Content (first 10 lines):"
+          Get-Content '../pyproject.toml' | Select-Object -First 10
+          Write-Host "File size:"
+          Get-Item '../pyproject.toml' | Select-Object Name, Length, LastWriteTime
+        } else {
+          Write-Host "pyproject.toml not found"
+        }
+        
+        Write-Host "Checking for setup.py..."
+        if (Test-Path 'setup.py') {
+          Write-Host "setup.py found"
+          Write-Host "Content (first 10 lines):"
+          Get-Content 'setup.py' | Select-Object -First 10
+        } else {
+          Write-Host "setup.py not found"
+        }
+
+    - name: Test Python imports
+      shell: powershell
+      run: |
+        Write-Host "Testing Python imports..."
+        try {
+          Write-Host "Python version:"
+          python --version
+          pip install rich
+          
+          Write-Host "Testing powerlogger import..."
+          python -c "import powerlogger; print('PowerLogger imported successfully'); print(f'Version: {powerlogger.__version__}')"
+        } catch {
+          Write-Host "Import failed: $($_.Exception.Message)"
+        }
+
+    - name: Test package building
+      shell: powershell
+      run: |
+        Write-Host "Testing package building..."
+        try {
+          Write-Host "Installing build tools..."
+          pip install build twine
+          
+          Write-Host "Testing build command..."
+          python -m build --help
+          
+          Write-Host "Testing twine check..."
+          if (Test-Path 'dist') {
+            Get-ChildItem 'dist' | Format-Table Name, Length
+            python -m twine check dist/*
+          } else {
+            Write-Host "No dist directory found"
+          }
+        } catch {
+          Write-Host "Build test failed: $($_.Exception.Message)"
+        }
+
+  summary:
+    needs: [test, debug]
+    runs-on: windows-latest
+    if: always()
+    
+    steps:
+    - name: Debug Summary
+      shell: powershell
+      run: |
+        $summary = @()
+        $summary += "## Debug Dependencies Summary"
+        $summary += "- Simple Test Job: ${{ needs.test.result }}"
+        $summary += "- Debug Job: ${{ needs.debug.result }}"
+        
+        if ("${{ needs.test.result }}" -eq "success" -and "${{ needs.debug.result }}" -eq "success") {
+          $summary += "- Overall Status: All debug checks passed"
+        } else {
+          $summary += "- Overall Status: Some debug checks failed"
+        }
+        
+        $summary += "- Platform: Windows"
+        $summary += "- Status: Debug completed"
+        $summary += ""
+        $summary += "## What was checked:"
+        $summary += "- Repository structure and file locations"
+        $summary += "- Dependency file existence and content"
+        $summary += "- Python import capabilities"
+        $summary += "- Package building tools"
+        
+        $summary | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $_ }
+
+
+

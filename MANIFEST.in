@@ -1,0 +1,27 @@
+include README.md
+include CHANGELOG.md
+include LICENSE
+include requirements.txt
+include requirements-dev.txt
+include log_config.ini
+include pyproject.toml
+include .github/workflows/*.yml
+include WIKI_*.md
+include GITHUB_ACTIONS.md
+include PUBLISHING_GUIDE.md
+
+recursive-include powerlogger *.py
+recursive-include powerlogger *.ini
+recursive-include powerlogger *.txt
+
+recursive-include tests *.py
+
+global-exclude __pycache__
+global-exclude *.py[co]
+global-exclude .DS_Store
+global-exclude .git*
+global-exclude .github
+global-exclude logs
+global-exclude build
+global-exclude dist
+global-exclude *.egg-info

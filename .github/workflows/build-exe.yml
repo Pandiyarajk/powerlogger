@@ -1,0 +1,283 @@
+name: Windows-Only Build & Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  PACKAGE_NAME: "powerlogger"
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Debug repository structure
+        shell: powershell
+        run: |
+          Write-Host "Repository root contents:"
+          Get-ChildItem -Name
+          
+          Write-Host "Checking for requirements.txt..."
+          if (Test-Path '../requirements.txt') {
+            Write-Host "requirements.txt found"
+            Get-Content '../requirements.txt' | Select-Object -First 5
+          } else {
+            Write-Host "requirements.txt not found"
+          }
+          
+          Write-Host "Checking for pyproject.toml..."
+          if (Test-Path '../pyproject.toml') {
+            Write-Host "pyproject.toml found"
+            Get-Content '../pyproject.toml' | Select-Object -First 5
+          } else {
+            Write-Host "pyproject.toml not found"
+          }
+          
+          Write-Host "Checking for powerlogger directory..."
+          if (Test-Path 'powerlogger') {
+            Write-Host "powerlogger directory found"
+            Get-ChildItem 'powerlogger' -Recurse -Name | Select-Object -First 10
+          } else {
+            Write-Host "powerlogger directory not found"
+          }
+          
+          Write-Host "Checking for tests directory..."
+          if (Test-Path 'tests') {
+            Write-Host "tests directory found"
+            Get-ChildItem 'tests' -Recurse -Name | Select-Object -First 10
+          } else {
+            Write-Host "tests directory not found"
+          }
+      
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          
+          # Install dependencies from requirements.txt if it exists
+          if (Test-Path '../requirements.txt') {
+            Write-Host "Installing dependencies from requirements.txt..."
+            pip install -r ../requirements.txt
+            pip install rich
+          } else {
+            Write-Host "Installing basic testing tools..."
+            pip install pytest pytest-cov
+            pip install rich
+          }
+      
+      - name: Run tests
+        shell: powershell
+        run: |
+          Write-Host "Running tests..."
+          if (Test-Path 'tests') {
+            python -m pytest tests/ -v
+          } else {
+            Write-Host "No tests directory found, skipping tests"
+          }
+
+  windows-build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      shell: powershell
+      run: |
+        python -m pip install --upgrade pip
+        pip install rich
+        
+        Write-Host "Checking repository structure..."
+        Get-ChildItem -Recurse -Name | Where-Object { $_ -match "(requirements\.txt|pyproject\.toml)" }
+        
+        Write-Host "Checking for requirements.txt..."
+        if (Test-Path '../requirements.txt') {
+          Write-Host "requirements.txt found"
+          Get-Content '../requirements.txt' | Select-Object -First 5
+        } else {
+          Write-Host "requirements.txt not found"
+        }
+        
+        Write-Host "Checking for pyproject.toml..."
+        if (Test-Path '../pyproject.toml') {
+          Write-Host "pyproject.toml found"
+          Get-Content '../pyproject.toml' | Select-Object -First 5
+        } else {
+          Write-Host "pyproject.toml not found"
+        }
+        
+        # Install dependencies from requirements.txt if it exists
+        if (Test-Path '../requirements.txt') {
+          Write-Host "Installing dependencies from requirements.txt..."
+          pip install -r ../requirements.txt
+        } else {
+          Write-Host "Installing basic testing tools..."
+          pip install pytest pytest-cov build twine
+        }
+
+    - name: Run tests on Windows ${{ matrix.python-version }}
+      shell: powershell
+      run: |
+        python -m pytest tests/ -v --cov=powerlogger --cov-report=xml --cov-report=term-missing
+
+    - name: Build package on Windows ${{ matrix.python-version }}
+      shell: powershell
+      run: |
+        python -m build
+        Write-Host "Package built successfully for Python ${{ matrix.python-version }}"
+        Get-ChildItem dist/ | Format-Table Name, Length
+
+    - name: Check package on Windows ${{ matrix.python-version }}
+      shell: powershell
+      run: |
+        python -m twine check dist/*
+        Write-Host "Package validation passed for Python ${{ matrix.python-version }}"
+
+    - name: Test local installation on Windows ${{ matrix.python-version }}
+      shell: powershell
+      run: |
+        pip install dist/*.whl
+        python -c "import powerlogger; print('PowerLogger version:', powerlogger.__version__)"
+        python -c "from powerlogger import get_logger; logger = get_logger('test'); logger.info('Windows installation working on Python ${{ matrix.python-version }}!')"
+
+    - name: Test Windows-specific features on ${{ matrix.python-version }}
+      shell: powershell
+      run: |
+        python -c "from powerlogger import get_logger_with_file_handler; logger = get_logger_with_file_handler('windows_test_${{ matrix.python-version }}'); logger.info('Testing Windows file handling ...')"
+        if (Test-Path "logs\windows_test_${{ matrix.python-version }}.log") { 
+          Write-Host "Log file contents for Python ${{ matrix.python-version }}:" 
+          Get-Content "logs\windows_test_${{ matrix.python-version }}.log" | Select-Object -Last 5 
+        }
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: windows-tests-${{ matrix.python-version }}
+        name: codecov-windows-${{ matrix.python-version }}
+        fail_ci_if_error: false
+
+  windows-security:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install security tools
+      shell: powershell
+      run: |
+        python -m pip install --upgrade pip
+        pip install safety bandit
+
+    - name: Check dependencies for security vulnerabilities
+      shell: powershell
+      run: |
+        safety check --output json > safety-report.json
+        if (Test-Path 'safety-report.json') { 
+          Write-Host "Security vulnerabilities found:"
+          Get-Content 'safety-report.json' 
+        } else {
+          Write-Host "No security vulnerabilities found"
+        }
+
+    - name: Run bandit security analysis
+      shell: powershell
+      run: |
+        bandit -r powerlogger/ -f json -o bandit-report.json
+        if (Test-Path 'bandit-report.json') { 
+          Write-Host "Bandit security analysis results:"
+          Get-Content 'bandit-report.json' 
+        } else {
+          Write-Host "Bandit analysis completed"
+        }
+
+  windows-performance:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install performance testing tools
+      shell: powershell
+      run: |
+        python -m pip install --upgrade pip
+        pip install rich
+        # Install dependencies from requirements.txt if it exists
+        if (Test-Path '../requirements.txt') {
+          pip install -r ../requirements.txt          
+        }
+        # Install additional performance testing dependencies
+        pip install pytest-benchmark
+
+    - name: Test Windows performance
+      shell: powershell
+      run: |
+        python -c "from powerlogger import get_logger; logger = get_logger('perf_test'); logger.info('Performance test message'); print('Performance test completed')"
+
+    - name: Test Windows file rotation performance
+      shell: powershell
+      run: |
+        python -c "from powerlogger import get_logger_with_file_handler; logger = get_logger_with_file_handler('perf_rotation'); logger.info('Rotation test message'); print('Rotation test completed')"
+
+  windows-summary:
+    needs: [test, windows-build, windows-security, windows-performance]
+    runs-on: windows-latest
+    if: always()
+    
+    steps:
+    - name: Windows Build Summary
+      shell: powershell
+      run: |
+        $summary = @()
+        $summary += "## Windows Build Summary"
+        $summary += "- Simple Test Job: ${{ needs.test.result }}"
+        $summary += "- Windows Build Job: ${{ needs.windows-build.result }}"
+        $summary += "- Windows Security Job: ${{ needs.windows-security.result }}"
+        $summary += "- Windows Performance Job: ${{ needs.windows-performance.result }}"
+        
+        if ("${{ needs.test.result }}" -eq "success" -and "${{ needs.windows-build.result }}" -eq "success" -and "${{ needs.windows-security.result }}" -eq "success" -and "${{ needs.windows-performance.result }}" -eq "success") {
+          $summary += "- Overall Status: All Windows builds passed"
+        } else {
+          $summary += "- Overall Status: Some Windows builds failed"
+        }
+        
+        $summary += "- Platform: Windows-optimized build and testing"
+        $summary += "- Python Versions: 3.11, 3.12, 3.13"
+        $summary += "- Build System: Windows-optimized with PowerShell"
+        
+        $summary | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $_ }
+
+
+

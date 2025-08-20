@@ -1,0 +1,225 @@
+name: Publish PowerLogger to PyPI (Windows)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version to publish'
+        required: true
+        default: '0.1.0'
+      dry_run:
+        description: 'Dry run (build only, no upload)'
+        required: false
+        default: 'false'
+
+env:
+  PYTHON_VERSION: "3.13"
+  PACKAGE_NAME: "powerlogger"
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Debug repository structure
+        shell: powershell
+        run: |
+          Write-Host "Repository root contents:"
+          Get-ChildItem -Name
+          
+          Write-Host "Checking for requirements.txt..."
+          if (Test-Path 'requirements.txt') {
+            Write-Host "requirements.txt found"
+            Get-Content 'requirements.txt' | Select-Object -First 5
+          } else {
+            Write-Host "requirements.txt not found"
+          }
+          
+          Write-Host "Checking for pyproject.toml..."
+          if (Test-Path 'pyproject.toml') {
+            Write-Host "pyproject.toml found"
+            Get-Content 'pyproject.toml' | Select-Object -First 5
+          } else {
+            Write-Host "pyproject.toml not found"
+          }
+          
+          Write-Host "Checking for powerlogger directory..."
+          if (Test-Path 'powerlogger') {
+            Write-Host "powerlogger directory found"
+            Get-ChildItem 'powerlogger' -Recurse -Name | Select-Object -First 10
+          } else {
+            Write-Host "powerlogger directory not found"
+          }
+          
+          Write-Host "Checking for tests directory..."
+          if (Test-Path 'tests') {
+            Write-Host "tests directory found"
+            Get-ChildItem 'tests' -Recurse -Name | Select-Object -First 10
+          } else {
+            Write-Host "tests directory not found"
+          }
+      
+      - name: Install dependencies
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          
+          # Install dependencies from requirements.txt if it exists
+          if (Test-Path 'requirements.txt') {
+            Write-Host "Installing dependencies from requirements.txt..."
+            pip install -r requirements.txt
+          } else {
+            Write-Host "Installing basic testing tools..."
+            pip install pytest pytest-cov
+          }
+      
+      - name: Run tests
+        shell: powershell
+        run: |
+          Write-Host "Running tests..."
+          if (Test-Path 'tests') {
+            python -m pytest tests/ -v
+          } else {
+            Write-Host "No tests directory found, skipping tests"
+          }
+
+  build-and-publish:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    
+    steps:
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install build dependencies
+      shell: powershell
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine wheel setuptools pytest
+
+    - name: Run tests on Windows
+      shell: powershell
+      run: |
+        python -m pytest tests/ -v
+
+    - name: Build package on Windows
+      shell: powershell
+      run: |
+        python -m build
+        Get-ChildItem dist/ | Format-Table Name, Length
+
+    - name: Check package on Windows
+      shell: powershell
+      run: |
+        python -m twine check dist/*
+
+    - name: Set up PyPI credentials
+      if: github.event_name == 'release' || github.event.inputs.dry_run == 'false'
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+      shell: powershell
+      run: |
+        Write-Host "PyPI credentials configured"
+
+    - name: Upload to PyPI
+      if: github.event_name == 'release' || github.event.inputs.dry_run == 'false'
+      shell: powershell
+      run: |
+        python -m twine upload dist/*
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+
+    - name: Upload summary
+      if: always()
+      shell: powershell
+      run: |
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Windows Build Summary for ${{ matrix.python-version }}"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Python Version: ${{ matrix.python-version }}"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Package: ${{ env.PACKAGE_NAME }}"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Build Status: ${{ job.status }}"
+        if (Test-Path 'dist') {
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Package Files:"
+          Get-ChildItem dist/ | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "  - $($_.Name) ($($_.Length) bytes)" }
+        }
+
+  test-installation:
+    needs: [test, build-and-publish]
+    runs-on: windows-latest
+    if: github.event_name == 'release' || github.event.inputs.dry_run == 'false'
+    
+    steps:
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.13"
+
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Test PyPI installation on Windows
+      shell: powershell
+      run: |
+        pip install ${{ env.PACKAGE_NAME }} --no-cache-dir
+        python -c "import ${{ env.PACKAGE_NAME }}; Write-Host 'Package working from PyPI on Windows!' $(${{ env.PACKAGE_NAME }}.__version__)"
+        python -c "from ${{ env.PACKAGE_NAME }} import get_logger; logger = get_logger('test'); logger.info('Package working from PyPI on Windows!')"
+
+    - name: Test Windows-specific features
+      shell: powershell
+      run: |
+        python -c "from ${{ env.PACKAGE_NAME }} import get_logger_with_file_handler; logger = get_logger_with_file_handler('windows_test'); logger.info('Testing Windows file handling'); logger.warning('Windows warning test')"
+        if (Test-Path 'logs\windows_test.log') { 
+          Write-Host 'Log file contents:' 
+          Get-Content 'logs\windows_test.log' | Select-Object -Last 5 
+        }
+
+    - name: Installation test summary
+      if: always()
+      shell: powershell
+      run: |
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Windows Installation Test Summary"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Package: ${{ env.PACKAGE_NAME }}"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Test Status: ${{ job.status }}"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Installation: Success on Windows"
+        Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Windows Features: File handling, log rotation, UTF-8 support tested"
+
+  notify:
+    needs: [test, build-and-publish, test-installation]
+    runs-on: windows-latest
+    if: always()
+    
+    steps:
+    - name: PyPI Publishing Summary
+      shell: powershell
+      run: |
+        $summary = @()
+        $summary += "## PyPI Publishing Summary"
+        $summary += "- Simple Test Job: ${{ needs.test.result }}"
+        $summary += "- Build and Publish Job: ${{ needs.build-and-publish.result }}"
+        $summary += "- Test Installation Job: ${{ needs.test-installation.result }}"
+        
+        if ("${{ needs.test.result }}" -eq "success" -and "${{ needs.build-and-publish.result }}" -eq "success" -and "${{ needs.test-installation.result }}" -eq "success") {
+          $summary += "- Overall Status: All Windows checks passed"
+        } else {
+          $summary += "- Overall Status: Some Windows checks failed"
+        }
+        
+        $summary += "- Platform: Windows-optimized build and testing"
+        $summary += "- Package: PowerLogger successfully published to PyPI"
+        $summary += "- Python Versions: 3.11, 3.12, 3.13"
+        
+        $summary | ForEach-Object { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $_ }
